@@ -1,5 +1,7 @@
 package com.eia.cession.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,13 +19,19 @@ import java.util.UUID;
  * combine the lifecycle guard, the optimistic version check, and the FS-RI
  * acknowledgement in one transaction. A plain status update can never write
  * {@code HANDOFF_PENDING} or {@code HANDED_OFF}.</p>
+ *
+ * <p>Every aggregate write also appends its domain event to the transactional
+ * outbox in the same transaction (SPEC 7.5.1), so a rollback leaves neither the
+ * cession mutation nor the event behind.</p>
  */
 @Service
 public class CessionService {
     private final CessionRepository repository;
+    private final OutboxRepository outbox;
 
-    public CessionService(CessionRepository repository) {
+    public CessionService(CessionRepository repository, OutboxRepository outbox) {
         this.repository = repository;
+        this.outbox = outbox;
     }
 
     public List<Cession> list(UUID tenantId) {
@@ -35,13 +43,16 @@ public class CessionService {
                 .orElseThrow(() -> ApiException.notFound("Cession not found: " + id));
     }
 
+    @Transactional
     public Cession create(CreateCessionRequest request) {
         requireDirectBook(request.businessBook());
         requireNonNegative("cededPremium", request.cededPremium());
         requireNonNegative("cededLoss", request.cededLoss());
         String currency = requireCurrency(request.currency());
-        return repository.create(request.tenantId(), request.policyId(), request.cessionContractId(),
-                request.cededPremium(), request.cededLoss(), currency);
+        Cession cession = repository.create(request.tenantId(), request.policyId(),
+                request.cessionContractId(), request.cededPremium(), request.cededLoss(), currency);
+        outbox.insert(OutboxEvent.fromEnvelope(CessionEvents.created(cession, Instant.now())));
+        return cession;
     }
 
     @Transactional
@@ -56,8 +67,10 @@ public class CessionService {
             throw ApiException.badRequest("HANDOFF_REQUIRED",
                     "Cession " + id + " can move to " + target + " only through the FS-RI handoff endpoint");
         }
-        return repository.updateStatus(tenantId, id, target, expectedVersion)
+        Cession after = repository.updateStatus(tenantId, id, target, expectedVersion)
                 .orElseThrow(() -> ApiException.conflict("Cession " + id + " was modified concurrently"));
+        outbox.insert(OutboxEvent.fromEnvelope(CessionEvents.updated(current, after, Instant.now())));
+        return after;
     }
 
     /**
@@ -77,9 +90,11 @@ public class CessionService {
             throw ApiException.validation("fsriHandedOffAt", "must not be null");
         }
         Instant handedOffAt = request.fsriHandedOffAt();
-        return repository.recordHandoff(tenantId, id, expectedVersion,
+        Cession after = repository.recordHandoff(tenantId, id, expectedVersion,
                         fsriHandoffId, fsriStatus, handedOffAt)
                 .orElseThrow(() -> ApiException.conflict("Cession " + id + " was modified concurrently"));
+        outbox.insert(OutboxEvent.fromEnvelope(CessionEvents.handedOff(current, after, Instant.now())));
+        return after;
     }
 
     /**

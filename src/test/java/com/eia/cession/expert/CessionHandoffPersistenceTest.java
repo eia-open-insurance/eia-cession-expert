@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -20,13 +21,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * status and the FS-RI acknowledgement move together, and that a stale version
  * cannot apply either one.
  */
-@SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:cession_handoff;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.driver-class-name=org.h2.Driver",
-        "spring.datasource.username=sa",
-        "spring.datasource.password=",
-        "spring.sql.init.mode=always"
-})
+@SpringBootTest
+@ActiveProfiles("test")
 class CessionHandoffPersistenceTest {
 
     private static final UUID TENANT = UUID.fromString("11111111-1111-7111-8111-111111111111");

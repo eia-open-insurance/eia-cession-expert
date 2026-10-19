@@ -1,5 +1,6 @@
 package com.eia.cession.expert;
 
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -41,6 +42,9 @@ class CessionControllerTest {
 
     @MockitoBean
     private CessionRepository repository;
+
+    @MockitoBean
+    private OutboxRepository outbox;
 
     private static Cession cession(CessionStatus status, int version) {
         Instant now = Instant.parse("2026-10-19T12:00:00Z");

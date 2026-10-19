@@ -1,5 +1,6 @@
 package com.eia.cession.expert;
 
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -31,6 +32,9 @@ class CessionServiceTest {
 
     @Mock
     private CessionRepository repository;
+
+    @Mock
+    private OutboxRepository outbox;
 
     @InjectMocks
     private CessionService service;
