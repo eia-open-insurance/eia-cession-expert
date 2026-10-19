@@ -15,7 +15,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -31,6 +34,7 @@ class CessionControllerTest {
     private static final UUID ID = UUID.fromString("22222222-2222-7222-8222-222222222222");
     private static final UUID POLICY = UUID.fromString("33333333-3333-7333-8333-333333333333");
     private static final UUID CONTRACT = UUID.fromString("44444444-4444-7444-8444-444444444444");
+    private static final Instant HANDED_OFF_AT = Instant.parse("2026-10-19T12:00:00Z");
 
     @Autowired
     private MockMvc mvc;
@@ -41,7 +45,24 @@ class CessionControllerTest {
     private static Cession cession(CessionStatus status, int version) {
         Instant now = Instant.parse("2026-10-19T12:00:00Z");
         return new Cession(ID, TENANT, "DIRECT", "CES-000000001", POLICY, CONTRACT, status,
-                new BigDecimal("1000.0000"), new BigDecimal("250.0000"), "USD", version, now, now);
+                new BigDecimal("1000.0000"), new BigDecimal("250.0000"), "USD", version, now, now,
+                null, null, null, null);
+    }
+
+    private static Cession handedOff() {
+        Instant now = Instant.parse("2026-10-19T12:00:00Z");
+        return new Cession(ID, TENANT, "DIRECT", "CES-000000001", POLICY, CONTRACT,
+                CessionStatus.HANDED_OFF, new BigDecimal("1000.0000"), new BigDecimal("250.0000"),
+                "USD", 1, now, now,
+                "FSRI-CES-DIRECT-000001", "POSTED", HANDED_OFF_AT, null);
+    }
+
+    private static Cession failed() {
+        Instant now = Instant.parse("2026-10-19T12:00:00Z");
+        return new Cession(ID, TENANT, "DIRECT", "CES-000000001", POLICY, CONTRACT,
+                CessionStatus.RULE_APPLIED, new BigDecimal("1000.0000"), new BigDecimal("250.0000"),
+                "USD", 0, now, now,
+                null, "FAILED", null, "FSRI_UNAVAILABLE: timeout");
     }
 
     @Test
@@ -195,5 +216,105 @@ class CessionControllerTest {
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION"));
+    }
+
+    @Test
+    void refusesToWriteHandoffStateThroughTheStatusEndpoint() throws Exception {
+        when(repository.findById(TENANT, ID)).thenReturn(Optional.of(cession(CessionStatus.RULE_APPLIED, 0)));
+
+        mvc.perform(put("/internal/v1/cessions/{id}/status", ID)
+                        .param("tenantId", TENANT.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "HANDOFF_PENDING", "version": 0}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("HANDOFF_REQUIRED"));
+
+        verify(repository, never()).updateStatus(any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void recordsFsriAcknowledgementAndReturnsExposedFields() throws Exception {
+        when(repository.findById(TENANT, ID)).thenReturn(Optional.of(cession(CessionStatus.RULE_APPLIED, 0)));
+        when(repository.recordHandoff(TENANT, ID, 0, "FSRI-CES-DIRECT-000001", "POSTED", HANDED_OFF_AT))
+                .thenReturn(Optional.of(handedOff()));
+
+        mvc.perform(post("/internal/v1/cessions/{id}/handoff", ID)
+                        .param("tenantId", TENANT.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion": 0,
+                                  "fsriHandoffId": "FSRI-CES-DIRECT-000001",
+                                  "fsriStatus": "POSTED",
+                                  "fsriHandedOffAt": "2026-10-19T12:00:00Z"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("HANDED_OFF"))
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.fsriHandoffId").value("FSRI-CES-DIRECT-000001"))
+                .andExpect(jsonPath("$.fsriStatus").value("POSTED"))
+                .andExpect(jsonPath("$.fsriHandedOffAt").value("2026-10-19T12:00:00Z"));
+    }
+
+    @Test
+    void recordsHandoffFailureWithoutChangingLifecycleStatus() throws Exception {
+        when(repository.findById(TENANT, ID)).thenReturn(Optional.of(cession(CessionStatus.RULE_APPLIED, 0)));
+        when(repository.recordHandoffFailure(TENANT, ID, 0, "FSRI_UNAVAILABLE: timeout"))
+                .thenReturn(Optional.of(failed()));
+
+        mvc.perform(post("/internal/v1/cessions/{id}/handoff-failure", ID)
+                        .param("tenantId", TENANT.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"expectedVersion": 0, "fsriLastError": "FSRI_UNAVAILABLE: timeout"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RULE_APPLIED"))
+                .andExpect(jsonPath("$.version").value(0))
+                .andExpect(jsonPath("$.fsriStatus").value("FAILED"))
+                .andExpect(jsonPath("$.fsriLastError").value("FSRI_UNAVAILABLE: timeout"))
+                .andExpect(jsonPath("$.fsriHandoffId").doesNotExist());
+    }
+
+    @Test
+    void rejectsStaleHandoffVersionWith409() throws Exception {
+        when(repository.findById(TENANT, ID)).thenReturn(Optional.of(cession(CessionStatus.RULE_APPLIED, 2)));
+
+        mvc.perform(post("/internal/v1/cessions/{id}/handoff", ID)
+                        .param("tenantId", TENANT.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion": 1,
+                                  "fsriHandoffId": "FSRI-CES-DIRECT-000001",
+                                  "fsriStatus": "POSTED",
+                                  "fsriHandedOffAt": "2026-10-19T12:00:00Z"
+                                }
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT"));
+
+        verify(repository, never()).recordHandoff(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
+    void rejectsBlankFsriHandoffId() throws Exception {
+        mvc.perform(post("/internal/v1/cessions/{id}/handoff", ID)
+                        .param("tenantId", TENANT.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion": 0,
+                                  "fsriHandoffId": " ",
+                                  "fsriStatus": "POSTED",
+                                  "fsriHandedOffAt": "2026-10-19T12:00:00Z"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION"))
+                .andExpect(jsonPath("$.details.fsriHandoffId").exists());
     }
 }

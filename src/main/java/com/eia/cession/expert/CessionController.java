@@ -46,4 +46,18 @@ public class CessionController {
                               @Valid @RequestBody UpdateCessionStatusRequest request) {
         return service.transition(tenantId, id, request.status(), request.version());
     }
+
+    @PostMapping("/{id}/handoff")
+    public Cession recordHandoff(@RequestParam UUID tenantId,
+                                 @PathVariable UUID id,
+                                 @Valid @RequestBody RecordHandoffRequest request) {
+        return service.recordHandoff(tenantId, id, request);
+    }
+
+    @PostMapping("/{id}/handoff-failure")
+    public Cession recordHandoffFailure(@RequestParam UUID tenantId,
+                                        @PathVariable UUID id,
+                                        @Valid @RequestBody RecordHandoffFailureRequest request) {
+        return service.recordHandoffFailure(tenantId, id, request);
+    }
 }
