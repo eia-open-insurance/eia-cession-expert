@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Cession persistence, invariants, read models, batch jobs, Quartz schedules, and outbox/inbox. Direct-book ceded reinsurance contracts, cession rules, FS-RI hand-off, and recoverables.
+Cession persistence, invariants, read models, batch jobs, Quartz schedules, and outbox/inbox. Primary-book ceded reinsurance contracts, cession rules, FS-RI hand-off, and recoverables.
 
 ## Responsibilities
 
