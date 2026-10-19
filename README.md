@@ -30,6 +30,35 @@ Cession persistence, invariants, read models, batch jobs, Quartz schedules, and 
 - Security scan and SBOM
 - Build and publish
 
+## Implemented slice
+
+Spring Boot 3.4.0, Java 22, Gradle Kotlin DSL, port `8091`, PostgreSQL database `eia_cession`.
+`schema.sql` creates the `cession` table with its book, amount, and status check constraints.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/internal/v1/cessions?tenantId={tenantId}` | List cessions |
+| `GET` | `/internal/v1/cessions/{id}?tenantId={tenantId}` | Read one cession |
+| `POST` | `/internal/v1/cessions` | Persist a cession in `OPEN` |
+| `PUT` | `/internal/v1/cessions/{id}/status?tenantId={tenantId}` | Apply an optimistic, lifecycle-checked status change |
+
+Invariants enforced here: `business_book` is fixed to `DIRECT`; `ceded_premium` and `ceded_loss`
+are non-negative; the case lifecycle is `OPEN → RULE_APPLIED → HANDOFF_PENDING → HANDED_OFF →
+CONFIRMED`, with `REJECTED` and `CANCELLED` branches (SPEC 11.9.3). Errors are structured
+`{code, message, details}` responses.
+
+## Local run
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
+$env:PGPASSWORD='postgres'
+& 'C:\Program Files\PostgreSQL\17\bin\psql.exe' -U postgres -h localhost -c "CREATE DATABASE eia_cession;"
+.\gradlew.bat build
+.\gradlew.bat bootRun
+```
+
+Health: `http://localhost:8091/actuator/health`.
+
 ## Notes
 
 Writes data; does not decide business outcomes.
